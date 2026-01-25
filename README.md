@@ -30,7 +30,7 @@ ClearRecords is built on AWS cloud services, providing a scalable, secure, and c
 - **AWS S3** - Temporary storage for uploaded photos with automatic lifecycle policies for immediate deletion
 - **AWS Lambda** - Serverless compute for backend processing (Python)
 - **API Gateway** - RESTful API endpoints
-- **AWS Cognito** - User authentication and authorization
+- **AWS Cognito** - User authentication and authorisation
 - **DynamoDB** - NoSQL database for storing anonymised feedback reports only
 
 ### Mobile Application
@@ -69,7 +69,7 @@ ClearRecords is built on AWS cloud services, providing a scalable, secure, and c
    - Photo uploaded to AWS S3 temporary bucket (with lifecycle policy for auto-deletion)
 
 2. **Document Processing:**
-   - AWS Lambda function triggers AWS Textract to analyze the document
+   - AWS Lambda function triggers AWS Textract to analyse the document
    - AWS Textract extracts text, tables, and structured data from the photo
    - Extracted data returned to Lambda function
 
@@ -94,6 +94,397 @@ ClearRecords is built on AWS cloud services, providing a scalable, secure, and c
 - **IAM Roles:** Least-privilege access policies for Lambda functions
 - **Zero Retention:** S3 lifecycle policies ensure automatic deletion
 - **No Medical Data:** Only anonymised feedback reports stored (with user opt-in)
+
+---
+
+## AWS Setup & Configuration
+
+### Prerequisites
+
+1. **AWS Account** - Active AWS account with appropriate permissions
+2. **AWS CLI** - Installed and configured
+   ```bash
+   brew install awscli  # macOS
+   aws configure
+   ```
+3. **AWS SAM CLI** - For serverless application deployment
+   ```bash
+   brew install aws-sam-cli  # macOS
+   ```
+4. **Node.js & npm** - For React Native development
+5. **Python 3.11+** - For Lambda functions
+6. **React Native CLI** - For mobile app development
+
+### Step 1: AWS S3 Bucket Setup
+
+**Create S3 Bucket for Temporary Storage:**
+
+```bash
+# Create bucket with versioning disabled
+aws s3 mb s3://clearrecords-temp-<your-account-id> --region us-east-1
+
+# Configure lifecycle policy for automatic deletion (1 hour)
+aws s3api put-bucket-lifecycle-configuration \
+  --bucket clearrecords-temp-<your-account-id> \
+  --lifecycle-configuration file://s3-lifecycle-policy.json
+```
+
+**S3 Lifecycle Policy (`s3-lifecycle-policy.json`):**
+```json
+{
+  "Rules": [
+    {
+      "Id": "DeleteAfter1Hour",
+      "Status": "Enabled",
+      "ExpirationInDays": 0,
+      "ExpiredObjectDeleteMarker": false,
+      "NoncurrentVersionExpirationInDays": 0,
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
+    }
+  ]
+}
+```
+
+**Enable Encryption:**
+```bash
+aws s3api put-bucket-encryption \
+  --bucket clearrecords-temp-<your-account-id> \
+  --server-side-encryption-configuration '{
+    "Rules": [{
+      "ApplyServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+      }
+    }]
+  }'
+```
+
+### Step 2: AWS Textract Setup
+
+**Create IAM Role for Textract:**
+- Navigate to IAM Console → Roles → Create Role
+- Select "Textract" as service
+- Attach policy: `AmazonTextractFullAccess`
+- Add S3 read permissions for your bucket
+- Note the Role ARN for Lambda configuration
+
+**Enable Textract API:**
+- Textract is enabled by default in most regions
+- Verify access in AWS Console → Textract
+
+### Step 3: AWS Cognito Setup
+
+**Create User Pool:**
+
+```bash
+# Using AWS CLI
+aws cognito-idp create-user-pool \
+  --pool-name ClearRecordsUsers \
+  --auto-verified-attributes email \
+  --policies '{
+    "PasswordPolicy": {
+      "MinimumLength": 8,
+      "RequireUppercase": true,
+      "RequireLowercase": true,
+      "RequireNumbers": true,
+      "RequireSymbols": true
+    }
+  }'
+```
+
+**Create User Pool Client:**
+```bash
+aws cognito-idp create-user-pool-client \
+  --user-pool-id <your-pool-id> \
+  --client-name ClearRecordsMobile \
+  --generate-secret \
+  --explicit-auth-flows ALLOW_USER_PASSWORD_AUTH ALLOW_REFRESH_TOKEN_AUTH
+```
+
+### Step 4: DynamoDB Table Setup
+
+**Create Feedback Table:**
+
+```bash
+aws dynamodb create-table \
+  --table-name ClearRecordsFeedback \
+  --attribute-definitions \
+    AttributeName=userId,AttributeType=S \
+    AttributeName=feedbackId,AttributeType=S \
+  --key-schema \
+    AttributeName=userId,KeyType=HASH \
+    AttributeName=feedbackId,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST \
+  --time-to-live-specification Enabled=true,AttributeName=ttl
+```
+
+### Step 5: Environment Variables
+
+Create `.env` files for configuration:
+
+**Backend `.env`:**
+```env
+# AWS Configuration
+AWS_REGION=us-east-1
+AWS_ACCOUNT_ID=your-account-id
+
+# S3 Configuration
+S3_TEMP_BUCKET=clearrecords-temp-<your-account-id>
+S3_LIFECYCLE_DELETE_HOURS=1
+
+# Textract Configuration
+TEXTRACT_ROLE_ARN=arn:aws:iam::<account-id>:role/TextractRole
+
+# Cognito Configuration
+COGNITO_USER_POOL_ID=us-east-1_xxxxxxxxx
+COGNITO_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxx
+
+# DynamoDB Configuration
+DYNAMODB_FEEDBACK_TABLE=ClearRecordsFeedback
+
+# API Configuration
+API_STAGE=prod
+```
+
+---
+
+## Project File Structure
+
+```
+ClearRecords/
+├── README.md
+├── .gitignore
+│
+├── mobile/                          # React Native Mobile App
+│   ├── package.json
+│   ├── App.js
+│   ├── app.json
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── common/
+│   │   │   │   ├── Button.js
+│   │   │   │   ├── Input.js
+│   │   │   │   └── LoadingSpinner.js
+│   │   │   ├── forms/
+│   │   │   │   ├── LoginForm.js
+│   │   │   │   ├── RegisterForm.js
+│   │   │   │   └── NoteInputForm.js
+│   │   │   └── feedback/
+│   │   │       ├── FeedbackReport.js
+│   │   │       └── FeedbackItem.js
+│   │   ├── screens/
+│   │   │   ├── Auth/
+│   │   │   │   ├── LoginScreen.js
+│   │   │   │   └── RegisterScreen.js
+│   │   │   ├── Home/
+│   │   │   │   └── HomeScreen.js
+│   │   │   ├── Audit/
+│   │   │   │   ├── InputScreen.js
+│   │   │   │   ├── PhotoCaptureScreen.js
+│   │   │   │   └── ReviewScreen.js
+│   │   │   ├── Feedback/
+│   │   │   │   └── FeedbackScreen.js
+│   │   │   └── Profile/
+│   │   │       └── ProfileScreen.js
+│   │   ├── services/
+│   │   │   ├── api.js              # API client with AWS Amplify
+│   │   │   ├── auth.js             # Cognito authentication
+│   │   │   ├── s3.js               # S3 upload/download
+│   │   │   └── storage.js           # AsyncStorage utilities
+│   │   ├── navigation/
+│   │   │   └── AppNavigator.js
+│   │   ├── utils/
+│   │   │   ├── constants.js
+│   │   │   └── helpers.js
+│   │   └── aws-exports.js          # AWS Amplify configuration
+│   ├── android/
+│   └── ios/
+│
+├── backend/                         # Python Backend (Lambda Functions)
+│   ├── requirements.txt
+│   ├── template.yaml                # AWS SAM template
+│   ├── samconfig.toml               # SAM deployment config
+│   ├── functions/
+│   │   ├── document-processing/
+│   │   │   ├── app.py              # Lambda handler for Textract
+│   │   │   ├── textract_processor.py
+│   │   │   └── requirements.txt
+│   │   ├── audit-engine/
+│   │   │   ├── app.py              # Lambda handler for audit
+│   │   │   ├── audit_rules.py      # Rules-based audit logic
+│   │   │   ├── hcpc_standards.py   # HCPC standards definitions
+│   │   │   └── requirements.txt
+│   │   ├── feedback-generator/
+│   │   │   ├── app.py              # Lambda handler for feedback
+│   │   │   ├── feedback_builder.py
+│   │   │   └── requirements.txt
+│   │   └── auth/
+│   │       ├── app.py              # Lambda handler for auth
+│   │       └── requirements.txt
+│   ├── shared/                     # Shared code across functions
+│   │   ├── __init__.py
+│   │   ├── models.py               # Data models
+│   │   ├── utils.py                # Utility functions
+│   │   └── constants.py            # Constants
+│   └── tests/                       # Unit tests
+│       ├── test_audit_engine.py
+│       └── test_textract_processor.py
+│
+├── infrastructure/                  # Infrastructure as Code
+│   ├── template.yaml               # Main SAM template
+│   ├── s3-lifecycle-policy.json    # S3 lifecycle configuration
+│   ├── iam-policies/               # IAM policy documents
+│   │   ├── lambda-textract-policy.json
+│   │   └── lambda-dynamodb-policy.json
+│   └── deploy.sh                   # Deployment script
+│
+├── docs/                           # Documentation
+│   ├── api/                        # API documentation
+│   ├── architecture/               # Architecture diagrams
+│   └── deployment/                 # Deployment guides
+│
+└── scripts/                        # Utility scripts
+    ├── setup-aws.sh                # AWS resource setup
+    └── deploy.sh                   # Deployment script
+```
+
+### Key Files Explained
+
+**Mobile App (`mobile/`):**
+- `src/services/api.js` - API client configured with AWS Amplify
+- `src/services/auth.js` - Cognito authentication wrapper
+- `src/services/s3.js` - S3 upload/download utilities
+- `src/aws-exports.js` - Auto-generated by Amplify CLI
+
+**Backend (`backend/`):**
+- `template.yaml` - AWS SAM template defining all Lambda functions and resources
+- `functions/document-processing/app.py` - Processes photos with AWS Textract
+- `functions/audit-engine/audit_rules.py` - Rules-based audit logic (no ML)
+- `functions/feedback-generator/feedback_builder.py` - Generates feedback reports
+
+**Infrastructure (`infrastructure/`):**
+- `template.yaml` - Complete infrastructure definition
+- `s3-lifecycle-policy.json` - S3 auto-deletion configuration
+- `deploy.sh` - Automated deployment script
+
+---
+
+## AWS Service Configuration Details
+
+### Lambda Function Configuration
+
+**Document Processing Function:**
+- Runtime: Python 3.11
+- Memory: 512 MB
+- Timeout: 30 seconds
+- Environment Variables:
+  - `S3_TEMP_BUCKET` - S3 bucket name
+  - `TEXTRACT_ROLE_ARN` - IAM role for Textract
+- IAM Permissions:
+  - `textract:AnalyzeDocument`
+  - `s3:GetObject`
+  - `s3:DeleteObject`
+
+**Audit Engine Function:**
+- Runtime: Python 3.11
+- Memory: 256 MB
+- Timeout: 15 seconds
+- Environment Variables:
+  - `DYNAMODB_TABLE` - DynamoDB table name
+- IAM Permissions:
+  - `dynamodb:GetItem`
+  - `dynamodb:PutItem` (for feedback storage)
+
+### API Gateway Configuration
+
+- **API Type:** REST API
+- **Stage:** `prod`
+- **CORS:** Enabled for mobile app origins
+- **Authentication:** AWS Cognito (JWT tokens)
+- **Rate Limiting:** 1000 requests/minute per user
+
+### S3 Bucket Configuration
+
+- **Bucket Name:** `clearrecords-temp-<account-id>`
+- **Region:** `us-east-1` (or your preferred region)
+- **Versioning:** Disabled
+- **Encryption:** AES256 (SSE-S3)
+- **Lifecycle Policy:** Delete objects after 1 hour
+- **Public Access:** Blocked
+- **CORS:** Configured for mobile app uploads
+
+### DynamoDB Configuration
+
+- **Table Name:** `ClearRecordsFeedback`
+- **Partition Key:** `userId` (String)
+- **Sort Key:** `feedbackId` (String)
+- **Billing Mode:** Pay-per-request
+- **TTL:** Enabled (attribute: `ttl`)
+- **Encryption:** Enabled (AWS managed keys)
+
+### Cognito Configuration
+
+- **User Pool:** `ClearRecordsUsers`
+- **Email Verification:** Required
+- **Password Policy:** 
+  - Minimum 8 characters
+  - Requires uppercase, lowercase, numbers, symbols
+- **MFA:** Optional
+- **Token Expiration:** 1 hour (access), 30 days (refresh)
+
+---
+
+## Development Workflow
+
+### Local Development Setup
+
+1. **Backend (Lambda Functions):**
+   ```bash
+   cd backend
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -r requirements.txt
+   
+   # Test locally with SAM
+   sam local start-api
+   ```
+
+2. **Mobile App:**
+   ```bash
+   cd mobile
+   npm install
+   
+   # Configure Amplify
+   amplify init
+   amplify add auth
+   amplify add api
+   
+   # Run on iOS
+   npm run ios
+   
+   # Run on Android
+   npm run android
+   ```
+
+### Deployment Process
+
+1. **Deploy Backend:**
+   ```bash
+   cd backend
+   sam build
+   sam deploy --guided
+   ```
+
+2. **Deploy Mobile App:**
+   ```bash
+   cd mobile
+   amplify push
+   ```
+
+3. **Update Environment Variables:**
+   - Update `.env` files with deployed resource ARNs
+   - Update `aws-exports.js` in mobile app
 
 ---
 
@@ -147,13 +538,13 @@ ClearRecords is built on AWS cloud services, providing a scalable, secure, and c
      - Option to upload photo from device gallery
      - Clear instructions on anonymisation requirements
      - Maximum file size limit enforced for photos
-     - Mobile-optimized interface for both input methods
+     - Mobile-optimised interface for both input methods
 
 5. **US-2.2: Document Intelligence Processing**
    - As a physiotherapist, I want photos of my notes automatically converted to structured text, so that they can be audited
    - Acceptance Criteria:
      - AWS Textract processes photos to extract text and identify tables
-     - Text is organized into structured format (tables, forms, raw text)
+     - Text is organised into structured format (tables, forms, raw text)
      - User can review and edit extracted text before audit
      - Handles various handwriting styles and note formats (where supported by AWS Textract)
      - Clear indication of extraction confidence/quality
@@ -389,12 +780,12 @@ ClearRecords operates on a strict zero-retention policy for all clinical data:
 ### Document Intelligence Processing
 
 - Photos are processed using **AWS Textract** to extract structured text and identify tables
-- AWS Textract analyzes document images and extracts:
+- AWS Textract analyses document images and extracts:
   - Raw text content
   - Structured tables
   - Form fields
   - Handwritten text (where supported)
-- Extracted text is organized into structured format for audit processing
+- Extracted text is organised into structured format for audit processing
 - All extracted data is deleted immediately after audit completion
 - No extracted text or structured data is retained
 - Photos are temporarily stored in AWS S3 bucket with automatic deletion policies
