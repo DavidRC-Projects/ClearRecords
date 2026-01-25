@@ -317,17 +317,17 @@ ClearRecords operates on a strict zero-retention policy for all clinical data:
 
 ### What We Never Store
 
-- ❌ Patient names or identifiers
-- ❌ Medical information or clinical details
-- ❌ Original notes (text or photos)
-- ❌ Extracted text from document intelligence
-- ❌ Any patient-identifiable data
+- Patient names or identifiers
+- Medical information or clinical details
+- Original notes (text or photos)
+- Extracted text from document intelligence
+- Any patient-identifiable data
 
 ### What We Optionally Store (User Opt-in)
 
-- ✅ Anonymised feedback reports (no medical information)
-- ✅ User account information (email, professional registration number)
-- ✅ Audit history metadata (dates, improvement trends - no clinical content)
+- Anonymised feedback reports (no medical information)
+- User account information (email, professional registration number)
+- Audit history metadata (dates, improvement trends - no clinical content)
 
 ---
 
@@ -348,23 +348,15 @@ ClearRecords operates on a strict zero-retention policy for all clinical data:
 
 The following are explicitly **not** included in the MVP:
 
-- ❌ Machine learning or AI-based clinical analysis or judgment
-- ❌ Practitioner comparison or ranking
-- ❌ Integration with EPR systems
-- ❌ Multi-profession support (physiotherapy only for MVP)
-- ❌ Aggregate analytics dashboard
-- ❌ Clinical decision support
-- ❌ Patient risk assessment
-- ❌ Fitness-to-practise indicators
+- Machine learning or AI-based clinical analysis or judgment
+- Practitioner comparison or ranking
+- Integration with EPR systems
+- Multi-profession support (physiotherapy only for MVP)
+- Aggregate analytics dashboard
+- Clinical decision support
+- Patient risk assessment
+- Fitness-to-practise indicators
 
 **Note:** Document intelligence/OCR for photo-to-text conversion is **in scope** as it is required for processing photo uploads. This is distinct from ML-based clinical analysis, which remains out of scope.
-
----
-
-## Status
-
-**Concept & Planning Stage** - User stories defined, ready for development prioritisation.
-
----
 
 *"Better record keeping. Fewer fitness-to-practise cases. Clearer, defensible documentation. Consistent standards across registrants."*
