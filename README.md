@@ -20,6 +20,83 @@ Better record keeping. Fewer fitness-to-practise cases. Clearer, defensible docu
 
 ---
 
+## Technology Stack
+
+### AWS Cloud Infrastructure
+
+ClearRecords is built on AWS cloud services, providing a scalable, secure, and cost-effective platform:
+
+- **AWS Textract** - Document intelligence service for extracting text and structured data from photos of clinical notes
+- **AWS S3** - Temporary storage for uploaded photos with automatic lifecycle policies for immediate deletion
+- **AWS Lambda** - Serverless compute for backend processing (Python)
+- **API Gateway** - RESTful API endpoints
+- **AWS Cognito** - User authentication and authorization
+- **DynamoDB** - NoSQL database for storing anonymised feedback reports only
+
+### Mobile Application
+
+- **React Native** - Cross-platform mobile framework (iOS and Android)
+- **JavaScript** - Frontend development language
+- **AWS Amplify** - Mobile app deployment and integration with AWS services
+
+### Backend
+
+- **Python** - Backend development language
+- **FastAPI** - Modern Python web framework for API development
+- **Rules-based Audit Engine** - Deterministic, explainable documentation checks (no ML)
+
+### Key AWS Services Integration
+
+**AWS Textract:**
+- Processes photos of clinical notes uploaded from mobile devices
+- Extracts text and identifies tables/structured data
+- Converts handwritten or typed notes into machine-readable format
+- Integrated with S3 for temporary file storage during processing
+
+**AWS S3:**
+- Temporary storage bucket configured with lifecycle policies
+- Automatic deletion of uploaded photos after processing
+- Zero-retention policy enforced at infrastructure level
+
+---
+
+## AWS Architecture Overview
+
+### Data Flow
+
+1. **Photo Upload:**
+   - User takes photo or selects from gallery in React Native mobile app
+   - Photo uploaded to AWS S3 temporary bucket (with lifecycle policy for auto-deletion)
+
+2. **Document Processing:**
+   - AWS Lambda function triggers AWS Textract to analyze the document
+   - AWS Textract extracts text, tables, and structured data from the photo
+   - Extracted data returned to Lambda function
+
+3. **Audit Processing:**
+   - Lambda function processes extracted text through rules-based audit engine
+   - Checks performed against HCPC standards (no ML, deterministic rules)
+   - Audit results generated
+
+4. **Feedback Generation:**
+   - Feedback report created from audit results
+   - Report contains only anonymised feedback (no medical information)
+   - Original photo and extracted text deleted from S3 immediately
+
+5. **Storage (Optional):**
+   - User opts in to save anonymised feedback report
+   - Report stored in DynamoDB (no medical information)
+   - Original notes and extracted data never stored
+
+### Security & Compliance
+
+- **Encryption:** All data encrypted in transit (HTTPS) and at rest (S3, DynamoDB encryption)
+- **IAM Roles:** Least-privilege access policies for Lambda functions
+- **Zero Retention:** S3 lifecycle policies ensure automatic deletion
+- **No Medical Data:** Only anonymised feedback reports stored (with user opt-in)
+
+---
+
 ## Epics & User Stories
 
 ### Epic 1: User Authentication & Account Management
@@ -75,11 +152,12 @@ Better record keeping. Fewer fitness-to-practise cases. Clearer, defensible docu
 5. **US-2.2: Document Intelligence Processing**
    - As a physiotherapist, I want photos of my notes automatically converted to structured text, so that they can be audited
    - Acceptance Criteria:
-     - Document intelligence tool extracts text from photos
-     - Text is organized into tables/structured format
+     - AWS Textract processes photos to extract text and identify tables
+     - Text is organized into structured format (tables, forms, raw text)
      - User can review and edit extracted text before audit
-     - Handles various handwriting styles and note formats
+     - Handles various handwriting styles and note formats (where supported by AWS Textract)
      - Clear indication of extraction confidence/quality
+     - Photos temporarily stored in AWS S3 with automatic deletion
 
 6. **US-2.3: Anonymisation Check**
    - As a physiotherapist, I want the system to help identify potential patient identifiers, so that I can ensure my notes are properly anonymised
@@ -310,10 +388,16 @@ ClearRecords operates on a strict zero-retention policy for all clinical data:
 
 ### Document Intelligence Processing
 
-- Photos are processed using document intelligence/OCR services to extract structured text
-- Extracted text is organized into tables for audit processing
+- Photos are processed using **AWS Textract** to extract structured text and identify tables
+- AWS Textract analyzes document images and extracts:
+  - Raw text content
+  - Structured tables
+  - Form fields
+  - Handwritten text (where supported)
+- Extracted text is organized into structured format for audit processing
 - All extracted data is deleted immediately after audit completion
 - No extracted text or structured data is retained
+- Photos are temporarily stored in AWS S3 bucket with automatic deletion policies
 
 ### What We Never Store
 
@@ -333,14 +417,15 @@ ClearRecords operates on a strict zero-retention policy for all clinical data:
 
 ## Non-Functional Requirements
 
-- **Platform:** Mobile-first application (iOS and Android native apps)
+- **Platform:** Mobile-first application (iOS and Android native apps built with React Native)
 - **Performance:** Audit results generated within 30 seconds for typical SOAP notes
-- **Security:** All data encrypted in transit and at rest
-- **Availability:** 99% uptime target
+- **Security:** All data encrypted in transit and at rest using AWS security features
+- **Availability:** 99% uptime target (AWS managed services)
 - **Accessibility:** WCAG 2.1 AA compliance
-- **Document Intelligence:** Integration with document intelligence/OCR service for photo-to-text conversion
-- **Data Retention:** Zero retention policy - all notes and extracted data deleted immediately after processing
-- **Storage:** Only anonymised feedback reports stored (with user opt-in), no medical information ever stored
+- **Document Intelligence:** AWS Textract integration for photo-to-text conversion and table extraction
+- **Cloud Infrastructure:** AWS serverless architecture (Lambda, API Gateway, S3, DynamoDB)
+- **Data Retention:** Zero retention policy - all notes and extracted data deleted immediately after processing via S3 lifecycle policies
+- **Storage:** Only anonymised feedback reports stored in DynamoDB (with user opt-in), no medical information ever stored
 
 ---
 
@@ -357,6 +442,6 @@ The following are explicitly **not** included in the MVP:
 - Patient risk assessment
 - Fitness-to-practise indicators
 
-**Note:** Document intelligence/OCR for photo-to-text conversion is **in scope** as it is required for processing photo uploads. This is distinct from ML-based clinical analysis, which remains out of scope.
+**Note:** AWS Textract (document intelligence/OCR) for photo-to-text conversion is **in scope** as it is required for processing photo uploads. This is distinct from ML-based clinical analysis or judgment, which remains out of scope. AWS Textract is used solely for extracting and structuring text from images, not for making clinical assessments.
 
 *"Better record keeping. Fewer fitness-to-practise cases. Clearer, defensible documentation. Consistent standards across registrants."*
