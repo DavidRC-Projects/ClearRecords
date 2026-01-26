@@ -420,7 +420,7 @@ ClearRecords/
 - **Partition Key:** `userId` (String)
 - **Sort Key:** `feedbackId` (String)
 - **Billing Mode:** Pay-per-request
-- **TTL:** Enabled (attribute: `ttl`)
+- **TTL:** Enabled (attribute: `ttl`) - Feedback reports automatically deleted after 1 year
 - **Encryption:** Enabled (AWS managed keys)
 
 ### Cognito Configuration
@@ -776,6 +776,7 @@ ClearRecords operates on a strict zero-retention policy for all clinical data:
 - **No Medical Information Stored:** Patient names, medical information, or clinical details are never stored
 - **Feedback Only:** Only anonymised feedback reports are optionally saved (with explicit user opt-in)
 - **Immediate Deletion:** All note content and extracted data are confirmed deleted immediately after processing
+- **Automatic Cleanup:** Feedback reports stored in DynamoDB are automatically deleted after 1 year via Time to Live (TTL)
 
 ### Document Intelligence Processing
 
@@ -800,7 +801,7 @@ ClearRecords operates on a strict zero-retention policy for all clinical data:
 
 ### What We Optionally Store (User Opt-in)
 
-- Anonymised feedback reports (no medical information)
+- Anonymised feedback reports (no medical information) - Automatically deleted after 1 year via TTL
 - User account information (email, professional registration number)
 - Audit history metadata (dates, improvement trends - no clinical content)
 
