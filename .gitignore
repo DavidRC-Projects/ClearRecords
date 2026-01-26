@@ -1,0 +1,77 @@
+# Environment Variables (IMPORTANT - Never commit these!)
+.env
+.env.local
+.env.*.local
+backend/.env
+mobile/.env
+
+# Python
+backend/venv/
+backend/__pycache__/
+backend/*.pyc
+backend/*.db
+backend/.pytest_cache/
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# React Native / Node
+mobile/node_modules/
+mobile/.expo/
+mobile/.expo-shared/
+mobile/ios/Pods/
+mobile/android/app/build/
+mobile/android/build/
+mobile/.gradle/
+mobile/aws-exports.js
+mobile/.metro-health-check*
+mobile/yarn-error.log
+mobile/package-lock.json
+
+# AWS
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!s3-lifecycle-policy.json
+cognito-*.json
+dynamodb-output.json
+iam-*-output.json
+samconfig.toml
+.aws-sam/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.iml
+*.sublime-project
+*.sublime-workspace
+
+# Build
+dist/
+build/
+.sam/
+.aws-sam/
+*.zip
+*.tar.gz
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
