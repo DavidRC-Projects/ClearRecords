@@ -1,0 +1,15 @@
+{
+  "Rules": [
+    {
+      "ID": "DeleteAfter1Hour",
+      "Status": "Enabled",
+      "Filter": {},
+      "Expiration": {
+        "Days": 1
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
+    }
+  ]
+}

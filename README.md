@@ -121,7 +121,7 @@ ClearRecords is built on AWS cloud services, providing a scalable, secure, and c
 
 ```bash
 # Create bucket with versioning disabled
-aws s3 mb s3://clearrecords-temp-<your-account-id> --region us-east-1
+aws s3 mb s3://clearrecords-temp-<your-account-id> --region eu west
 
 # Configure lifecycle policy for automatic deletion (1 hour)
 aws s3api put-bucket-lifecycle-configuration \
