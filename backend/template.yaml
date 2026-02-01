@@ -221,6 +221,43 @@ Resources:
             Method: post
             # Auth will be added later with Cognito
 
+  # Audit Engine Function
+  AuditEngineFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/audit-engine/
+      Handler: app.lambda_handler
+      Timeout: 30
+      MemorySize: 512
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaDeadLetterQueue.Arn
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          ALLOWED_ORIGINS: !Ref AllowedOrigins
+          DYNAMODB_FEEDBACK_TABLE: !Ref FeedbackTable
+      Policies:
+        # DynamoDB read permission (for future use)
+        - DynamoDBReadPolicy:
+            TableName: !Ref FeedbackTable
+        # CloudWatch Logs permission
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AuditEngineFunction}*'
+      Events:
+        AuditDocument:
+          Type: Api
+          Properties:
+            Path: /audit
+            Method: post
+            # Auth will be added later with Cognito
+
   # SNS Topic for CloudWatch alarm notifications
   AlarmNotificationTopic:
     Type: AWS::SNS::Topic
@@ -385,3 +422,9 @@ Outputs:
     Value: !Ref TempStorageLoggingBucket
     Export:
       Name: !Sub '${AWS::StackName}-LoggingBucket'
+  
+  AuditEngineFunctionArn:
+    Description: Audit Engine Lambda Function ARN
+    Value: !GetAtt AuditEngineFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-AuditEngineFunction'
