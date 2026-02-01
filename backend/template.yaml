@@ -2,16 +2,154 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: ClearRecords API - Serverless Backend
 
+Globals:
+  Api:
+    # Throttling configured via MethodSettings (see documentation)
+    # Note: Throttling limits should be set via API Gateway usage plans in production
+    Cors:
+      AllowMethods: "'POST,GET,OPTIONS'"
+      AllowHeaders: "'Content-Type,Authorization'"
+      AllowOrigin: !If
+        - IsDevelopment
+        - "'*'"
+        - !Sub "'${AllowedOrigins}'"
+      MaxAge: "'300'"
+  Function:
+    Runtime: python3.11
+    Timeout: 30
+    MemorySize: 512
+    Environment:
+      Variables:
+        # Note: AWS_REGION is automatically set by Lambda, no need to set manually
+    # Enable X-Ray tracing for all functions
+    Tracing: Active
+    # CloudWatch Logs retention (30 days for compliance)
+    LoggingConfig:
+      LogGroup:
+        RetentionInDays: '30'
+
 Resources:
+  # Dead Letter Queue for Lambda error handling
+  LambdaDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-lambda-dlq'
+      MessageRetentionPeriod: 1209600  # 14 days
+      KmsMasterKeyId: alias/aws/sqs  # Use AWS managed key
+
+  # S3 Bucket for access logging (separate to avoid circular dependency)
+  TempStorageLoggingBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'clearrecords-logs-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldLogs
+            Status: Enabled
+            ExpirationInDays: 90  # Keep logs for 90 days
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: ClearRecords
+        - Key: Purpose
+          Value: AccessLogs
+
+  # S3 Bucket for temporary document storage
+  TempStorageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'clearrecords-temp-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Suspended
+      # Fix: ExpirationInDays must be >= 1 (AWS requirement)
+      # Use 1 day minimum - objects deleted within 24 hours
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteAfter1Day
+            Status: Enabled
+            ExpirationInDays: 1
+            ExpiredObjectDeleteMarker: false
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      # Enable access logging for security audit (using separate logging bucket)
+      LoggingConfiguration:
+        DestinationBucketName: !Ref TempStorageLoggingBucket
+        LogFilePrefix: 'temp-bucket-access-logs/'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # Add tags for cost tracking and compliance
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: ClearRecords
+        - Key: DataClassification
+          Value: Temporary
+        - Key: AutoDelete
+          Value: 'true'
+
+  # DynamoDB Table for feedback storage (optional)
+  FeedbackTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ClearRecordsFeedback
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: feedbackId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: feedbackId
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        Enabled: true
+        AttributeName: ttl
+      SSESpecification:
+        SSEEnabled: true
+      # Enable point-in-time recovery for compliance
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      # Add tags
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: ClearRecords
+        - Key: DataClassification
+          Value: AnonymizedFeedback
+
   # Health Check Function
   HealthCheckFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Runtime: python3.11
-      Timeout: 30
-      MemorySize: 512
       CodeUri: functions/health/
       Handler: app.lambda_handler
+      # Inherits globals but can override
+      Timeout: 10  # Health checks should be fast
+      MemorySize: 128  # Minimal memory for health check
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaDeadLetterQueue.Arn
       Events:
         HealthCheck:
           Type: Api
@@ -19,7 +157,231 @@ Resources:
             Path: /health
             Method: get
 
+  # Document Processing Function
+  DocumentProcessingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/document-processing/
+      Handler: app.lambda_handler
+      Timeout: 60  # Textract can take longer
+      MemorySize: 1024  # More memory for processing
+      # Add reserved concurrency to prevent resource exhaustion
+      ReservedConcurrentExecutions: !Ref MaxConcurrency
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaDeadLetterQueue.Arn
+      Environment:
+        Variables:
+          S3_TEMP_BUCKET: !Ref TempStorageBucket
+          # Note: AWS_REGION is automatically set by Lambda runtime
+          ENVIRONMENT: !Ref Environment
+          REQUIRE_AUTH: !Ref RequireAuth
+          ALLOWED_ORIGINS: !Ref AllowedOrigins
+          S3_KEY_PREFIX: !Ref S3KeyPrefix
+          VALIDATE_USER_OWNERSHIP: !Ref ValidateUserOwnership
+          DYNAMODB_FEEDBACK_TABLE: !Ref FeedbackTable
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref TempStorageBucket
+        # S3 delete permission (no managed policy, use inline)
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:DeleteObject
+              Resource: !Sub 'arn:aws:s3:::${TempStorageBucket}/*'
+        # Security: Textract doesn't support resource-level permissions
+        # Note: Resource: '*' is required for Textract (AWS limitation)
+        # Actions are restricted to only what's needed
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - textract:AnalyzeDocument
+                - textract:DetectDocumentText
+              Resource: '*'  # Textract doesn't support resource ARNs
+              # Add condition to limit to specific region if possible
+              Condition:
+                StringEquals:
+                  'aws:RequestedRegion': !Ref AWS::Region
+        # Explicit CloudWatch Logs permission (granular, not full access)
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${DocumentProcessingFunction}*'
+      Events:
+        ProcessDocument:
+          Type: Api
+          Properties:
+            Path: /process-document
+            Method: post
+            # Auth will be added later with Cognito
+
+  # SNS Topic for CloudWatch alarm notifications
+  AlarmNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-alarms'
+      DisplayName: ClearRecords Alarms
+      KmsMasterKeyId: alias/aws/sns
+
+  # CloudWatch Alarm: Lambda Errors
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-lambda-errors'
+      AlarmDescription: Alert when Lambda function errors exceed threshold
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300  # 5 minutes
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref DocumentProcessingFunction
+      AlarmActions:
+        - !Ref AlarmNotificationTopic
+
+  # CloudWatch Alarm: Lambda Throttles
+  LambdaThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-lambda-throttles'
+      AlarmDescription: Alert when Lambda function is throttled
+      MetricName: Throttles
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref DocumentProcessingFunction
+      AlarmActions:
+        - !Ref AlarmNotificationTopic
+
+  # CloudWatch Alarm: Lambda Duration (high latency)
+  LambdaDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-lambda-duration'
+      AlarmDescription: Alert when Lambda function takes too long
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 50000  # 50 seconds (close to 60s timeout)
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref DocumentProcessingFunction
+      AlarmActions:
+        - !Ref AlarmNotificationTopic
+
+# Parameters for configuration
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues:
+      - production
+      - development
+    Description: Environment name (production or development)
+  
+  RequireAuth:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Require authentication for document processing
+  
+  AllowedOrigins:
+    Type: String
+    Default: ''
+    Description: Comma-separated list of allowed CORS origins (leave empty for default behavior)
+  
+  S3KeyPrefix:
+    Type: String
+    Default: ''
+    Description: Expected S3 key prefix for document validation (e.g., 'uploads/')
+  
+  ValidateUserOwnership:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Validate that users can only access their own documents
+  
+  MaxConcurrency:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+    Description: Maximum concurrent executions for document processing function
+  
+  ApiBurstLimit:
+    Type: Number
+    Default: 200
+    MinValue: 1
+    Description: API Gateway burst limit (requests per second)
+  
+  ApiRateLimit:
+    Type: Number
+    Default: 100
+    MinValue: 0.1
+    Description: API Gateway rate limit (requests per second)
+
+# Conditions
+Conditions:
+  IsDevelopment: !Equals [!Ref Environment, 'development']
+
 Outputs:
   ApiUrl:
     Description: API Gateway endpoint URL
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/'
+  
+  TempStorageBucketName:
+    Description: S3 bucket for temporary document storage
+    Value: !Ref TempStorageBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-TempBucket'
+  
+  FeedbackTableName:
+    Description: DynamoDB table for feedback storage
+    Value: !Ref FeedbackTable
+    Export:
+      Name: !Sub '${AWS::StackName}-FeedbackTable'
+  
+  DocumentProcessingFunctionArn:
+    Description: Document Processing Lambda Function ARN
+    Value: !GetAtt DocumentProcessingFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-DocumentProcessingFunction'
+  
+  DeadLetterQueueUrl:
+    Description: Dead Letter Queue URL for failed Lambda invocations
+    Value: !Ref LambdaDeadLetterQueue
+    Export:
+      Name: !Sub '${AWS::StackName}-DLQ'
+  
+  AlarmNotificationTopicArn:
+    Description: SNS Topic ARN for CloudWatch alarm notifications
+    Value: !Ref AlarmNotificationTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-AlarmTopic'
+  
+  TempStorageLoggingBucketName:
+    Description: S3 bucket for access logs
+    Value: !Ref TempStorageLoggingBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-LoggingBucket'

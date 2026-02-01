@@ -25,9 +25,11 @@ class TextractProcessor:
             raise ValueError(f"Invalid S3 bucket name format: {self.s3_bucket}")
         
         # Initialize AWS clients
-        region = os.environ.get('AWS_REGION', 'eu-west-2')
+        # Note: AWS_REGION is automatically set by Lambda runtime
+        # Use default only for local testing
+        region = os.environ.get('AWS_REGION', os.environ.get('AWS_DEFAULT_REGION', 'eu-west-2'))
         self.textract = boto3.client('textract', region_name=region)
-        self.s3_client = boto3.client('s3', region_name=region)
+        # Note: s3_client not needed - Textract accesses S3 directly via IAM role
         
         # Note: TEXTRACT_ROLE_ARN is not needed for synchronous analyze_document
         # It's only required for asynchronous operations
@@ -306,8 +308,8 @@ class TextractProcessor:
                                                     for word_id in rel['Ids']:
                                                         if word_id in block_map:
                                                             word = block_map[word_id]
-                                                        if word.get('BlockType') == 'WORD':
-                                                            value_text += word.get('Text', '') + ' '
+                                                            if word.get('BlockType') == 'WORD':
+                                                                value_text += word.get('Text', '') + ' '
                     
                     if key_text.strip():
                         forms.append({

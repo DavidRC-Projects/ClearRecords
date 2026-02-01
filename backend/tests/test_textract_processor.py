@@ -46,7 +46,7 @@ class TestTextractProcessor(unittest.TestCase):
         self.assertEqual(self.processor.s3_bucket, 'test-bucket')
         self.assertEqual(self.processor.role_arn, 'arn:aws:iam::123456789:role/TestRole')
         self.assertIsNotNone(self.processor.textract)
-        self.assertIsNotNone(self.processor.s3_client)
+        # Note: s3_client removed as it's not needed - Textract accesses S3 directly
     
     def test_process_document_success_simple_text(self):
         """Test successful document processing with simple text"""
