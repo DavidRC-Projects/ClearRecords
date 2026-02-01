@@ -402,8 +402,11 @@ class TestTextractProcessor(unittest.TestCase):
         # Assertions
         self.assertEqual(len(result), 1)
         self.assertEqual(len(result[0]['rows']), 2)
+        # Row 0 has 2 columns: 'Exercise Type' and 'Reps'
         self.assertEqual(result[0]['rows'][0], ['Exercise Type', 'Reps'])
-        self.assertEqual(result[0]['rows'][1], ['Squats'])
+        # Row 1 has 2 columns: 'Squats' in column 1, empty string in column 2 (missing cell)
+        # Fix: Updated to match correct behavior - missing cells are filled with empty strings
+        self.assertEqual(result[0]['rows'][1], ['Squats', ''])
     
     def test_extract_forms_multiple(self):
         """Test extraction of multiple form key-value pairs"""
