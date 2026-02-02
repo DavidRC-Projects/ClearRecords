@@ -6,7 +6,8 @@ Deterministic checks against HCPC standards.
 import re
 from hcpc_standards import (
     HCPC_STANDARDS, SOAP_KEYWORDS, JUDGMENTAL_LANGUAGE,
-    EMOTIVE_LANGUAGE, SPECULATIVE_PATTERNS, RATIONALE_INDICATORS
+    EMOTIVE_LANGUAGE, SPECULATIVE_PATTERNS, RATIONALE_INDICATORS,
+    AMENDMENT_INDICATORS
 )
 
 # Security: Maximum text size to prevent memory exhaustion (10MB)
@@ -118,7 +119,8 @@ class AuditEngine:
             r'\d{4}[/-]\d{1,2}[/-]\d{1,2}',    # YYYY/MM/DD
             r'\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{2,4}',  # DD Month YYYY
         ]
-        has_date = any(re.search(pattern, text, re.IGNORECASE) for pattern in date_patterns)
+        # Text is already lowercase, so IGNORECASE is redundant but harmless
+        has_date = any(re.search(pattern, text) for pattern in date_patterns)
         
         if not has_date:
             findings.append({
@@ -135,7 +137,8 @@ class AuditEngine:
             r'\d{1,2}:\d{2}',  # HH:MM
             r'\d{1,2}:\d{2}\s*(am|pm)',  # HH:MM AM/PM
         ]
-        has_time = any(re.search(pattern, text, re.IGNORECASE) for pattern in time_patterns)
+        # Text is already lowercase, so IGNORECASE is redundant but harmless
+        has_time = any(re.search(pattern, text) for pattern in time_patterns)
         
         if not has_time:
             findings.append({
@@ -154,7 +157,8 @@ class AuditEngine:
             r'signed[:\s]+\w+',
             r'by[:\s]+\w+',
         ]
-        has_practitioner = any(re.search(pattern, text, re.IGNORECASE) for pattern in practitioner_patterns)
+        # Text is already lowercase, so IGNORECASE is redundant but harmless
+        has_practitioner = any(re.search(pattern, text) for pattern in practitioner_patterns)
         
         if not has_practitioner:
             findings.append({
@@ -173,12 +177,27 @@ class AuditEngine:
         findings = []
         
         # Check for SOAP sections
+        # Validate SOAP_KEYWORDS is available
+        if not SOAP_KEYWORDS:
+            return findings
+        
         sections_found = {}
         for section, keywords in SOAP_KEYWORDS.items():
             for keyword in keywords:
-                if keyword in text:
-                    sections_found[section] = True
-                    break
+                # Use word boundaries for short keywords to avoid partial matches
+                # For longer keywords or those with punctuation, use simple 'in' check
+                if len(keyword) <= 3 or ':' in keyword or '-' in keyword:
+                    # Short keywords or those with punctuation: check as-is
+                    if keyword in text:
+                        sections_found[section] = True
+                        break
+                else:
+                    # Longer keywords: use word boundary to avoid partial matches
+                    # Create a pattern that matches the keyword as a whole word
+                    pattern = r'\b' + re.escape(keyword) + r'\b'
+                    if re.search(pattern, text):
+                        sections_found[section] = True
+                        break
         
         # Check for each required section
         required_sections = ['subjective', 'objective', 'assessment', 'plan']
@@ -219,7 +238,16 @@ class AuditEngine:
         findings = []
         
         # Check for judgmental language
-        judgmental_found = [word for word in JUDGMENTAL_LANGUAGE if word in text]
+        # Use word boundaries to avoid partial matches (e.g., "uncooperative" in "uncooperatively")
+        if not JUDGMENTAL_LANGUAGE:
+            pass  # No judgmental language list available
+        else:
+            judgmental_found = []
+            for word in JUDGMENTAL_LANGUAGE:
+                # Use word boundary regex to match whole words only
+                pattern = r'\b' + re.escape(word) + r'\b'
+                if re.search(pattern, text):
+                    judgmental_found.append(word)
         if judgmental_found:
             findings.append({
                 'category': 'objectivity',
@@ -231,7 +259,16 @@ class AuditEngine:
             })
         
         # Check for emotive language
-        emotive_found = [word for word in EMOTIVE_LANGUAGE if word in text]
+        # Use word boundaries to avoid partial matches
+        if not EMOTIVE_LANGUAGE:
+            emotive_found = []
+        else:
+            emotive_found = []
+            for word in EMOTIVE_LANGUAGE:
+                # Use word boundary regex to match whole words only
+                pattern = r'\b' + re.escape(word) + r'\b'
+                if re.search(pattern, text):
+                    emotive_found.append(word)
         if emotive_found:
             findings.append({
                 'category': 'objectivity',
@@ -379,7 +416,8 @@ class AuditEngine:
             r'\d{1,2}:\d{2}',  # Time
             r'\d{1,2}:\d{2}\s*(am|pm)',
         ]
-        has_timestamp = any(re.search(pattern, text, re.IGNORECASE) for pattern in timestamp_patterns)
+        # Text is already lowercase, so IGNORECASE is redundant but harmless
+        has_timestamp = any(re.search(pattern, text) for pattern in timestamp_patterns)
         
         if not has_timestamp:
             findings.append({
@@ -392,23 +430,45 @@ class AuditEngine:
             })
         
         # Check for amendment markers (words suggesting later addition)
-        amendment_keywords = ['amended', 'added later', 'correction', 'updated']
-        has_amendment_markers = any(keyword in text for keyword in amendment_keywords)
+        # AMENDMENT_INDICATORS is imported at module level, so it's always available
+        amendment_keywords = AMENDMENT_INDICATORS
         
-        if has_amendment_markers:
-            # Check if amendment is clearly marked
-            # Fix: Store find result to avoid calling twice and handle -1 case
-            # Check all occurrences of 'amended' (though typically there's only one)
-            amended_idx = text.find('amended')
-            if amended_idx != -1:
-                # Check 50 characters after 'amended' for date indicator
+        # Check for any amendment keyword in text
+        has_amendment_markers = False
+        first_amendment_keyword = None
+        first_amendment_idx = -1
+        
+        for keyword in amendment_keywords:
+            # Use word boundaries for single words, simple 'in' for phrases
+            if ' ' in keyword:
+                # Multi-word phrase: use simple 'in' check
+                if keyword in text:
+                    has_amendment_markers = True
+                    idx = text.find(keyword)
+                    if idx != -1 and (first_amendment_idx == -1 or idx < first_amendment_idx):
+                        first_amendment_keyword = keyword
+                        first_amendment_idx = idx
+            else:
+                # Single word: use word boundary to avoid partial matches
+                pattern = r'\b' + re.escape(keyword) + r'\b'
+                match = re.search(pattern, text)
+                if match:
+                    has_amendment_markers = True
+                    idx = match.start()
+                    if first_amendment_idx == -1 or idx < first_amendment_idx:
+                        first_amendment_keyword = keyword
+                        first_amendment_idx = idx
+        
+        if has_amendment_markers and first_amendment_idx != -1:
+                # Check 50 characters after amendment keyword for date indicator
                 # Security: Prevent index out of bounds
-                end_idx = min(amended_idx + 50, len(text))
-                check_region = text[amended_idx:end_idx]
+                keyword_len = len(first_amendment_keyword) if first_amendment_keyword else 0
+                end_idx = min(first_amendment_idx + keyword_len + 50, len(text))
+                check_region = text[first_amendment_idx:end_idx]
                 if 'date' not in check_region:
                     # Also check for date patterns in the region
-                    date_in_region = any(re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', check_region) or
-                                        re.search(r'\d{4}[/-]\d{1,2}[/-]\d{1,2}', check_region))
+                    date_in_region = (re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', check_region) is not None or
+                                     re.search(r'\d{4}[/-]\d{1,2}[/-]\d{1,2}', check_region) is not None)
                     if not date_in_region:
                         findings.append({
                             'category': 'timeliness',
@@ -423,24 +483,51 @@ class AuditEngine:
     
     def _extract_section(self, text, section_name):
         """Extract a specific SOAP section from text"""
+        if not SOAP_KEYWORDS:
+            return None
+        
         keywords = SOAP_KEYWORDS.get(section_name, [])
+        if not keywords:
+            return None
         
         for keyword in keywords:
-            if keyword in text:
-                # Try to find section boundaries
+            # Use appropriate matching based on keyword type
+            if len(keyword) <= 3 or ':' in keyword or '-' in keyword:
+                # Short keywords or those with punctuation: check as-is
+                if keyword not in text:
+                    continue
                 start_idx = text.find(keyword)
-                if start_idx != -1:
-                    # Look for next section or end of text
-                    remaining_text = text[start_idx:]
-                    
-                    # Find next section marker
-                    next_section_idx = len(remaining_text)
-                    for other_section, other_keywords in SOAP_KEYWORDS.items():
-                        if other_section != section_name:
-                            for other_keyword in other_keywords:
-                                idx = remaining_text.find(other_keyword, len(keyword))
-                                if idx != -1 and idx < next_section_idx:
-                                    next_section_idx = idx
+            else:
+                # Longer keywords: use word boundary to avoid partial matches
+                pattern = r'\b' + re.escape(keyword) + r'\b'
+                match = re.search(pattern, text)
+                if not match:
+                    continue
+                start_idx = match.start()
+            
+            if start_idx != -1:
+                # Look for next section or end of text
+                remaining_text = text[start_idx:]
+                
+                # Find next section marker (avoid matching keywords that are part of current keyword)
+                next_section_idx = len(remaining_text)
+                keyword_end = start_idx + len(keyword)
+                
+                for other_section, other_keywords in SOAP_KEYWORDS.items():
+                    if other_section != section_name:
+                        for other_keyword in other_keywords:
+                            # Only search after the current keyword ends
+                            search_start = len(keyword)
+                            if len(other_keyword) <= 3 or ':' in other_keyword or '-' in other_keyword:
+                                idx = remaining_text.find(other_keyword, search_start)
+                            else:
+                                # Use word boundary for longer keywords
+                                pattern = r'\b' + re.escape(other_keyword) + r'\b'
+                                match = re.search(pattern, remaining_text[search_start:])
+                                idx = match.start() + search_start if match else -1
+                            
+                            if idx != -1 and idx < next_section_idx:
+                                next_section_idx = idx
                     
                     # Security: Limit section size to prevent memory issues
                     # If section is extremely long, truncate it
@@ -457,8 +544,23 @@ class AuditEngine:
         strengths = []
         
         # Check for comprehensive SOAP structure
-        sections_found = sum(1 for section in SOAP_KEYWORDS.keys() 
-                           if any(kw in text for kw in SOAP_KEYWORDS[section]))
+        if not SOAP_KEYWORDS:
+            return strengths
+        
+        sections_found = 0
+        for section in SOAP_KEYWORDS.keys():
+            keywords = SOAP_KEYWORDS[section]
+            for kw in keywords:
+                # Use appropriate matching based on keyword type
+                if len(kw) <= 3 or ':' in kw or '-' in kw:
+                    if kw in text:
+                        sections_found += 1
+                        break
+                else:
+                    pattern = r'\b' + re.escape(kw) + r'\b'
+                    if re.search(pattern, text):
+                        sections_found += 1
+                        break
         if sections_found == 4:
             strengths.append({
                 'aspect': 'Structure',
@@ -475,8 +577,22 @@ class AuditEngine:
             })
         
         # Check for professional tone (no judgmental/emotive language)
-        has_judgmental = any(word in text for word in JUDGMENTAL_LANGUAGE)
-        has_emotive = any(word in text for word in EMOTIVE_LANGUAGE)
+        # Use word boundaries to avoid partial matches
+        has_judgmental = False
+        if JUDGMENTAL_LANGUAGE:
+            for word in JUDGMENTAL_LANGUAGE:
+                pattern = r'\b' + re.escape(word) + r'\b'
+                if re.search(pattern, text):
+                    has_judgmental = True
+                    break
+        
+        has_emotive = False
+        if EMOTIVE_LANGUAGE:
+            for word in EMOTIVE_LANGUAGE:
+                pattern = r'\b' + re.escape(word) + r'\b'
+                if re.search(pattern, text):
+                    has_emotive = True
+                    break
         if not has_judgmental and not has_emotive:
             strengths.append({
                 'aspect': 'Professional Tone',
