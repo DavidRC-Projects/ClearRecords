@@ -12,15 +12,25 @@ Globals:
       AllowOrigin: !If
         - IsDevelopment
         - "'*'"
-        - !Sub "'${AllowedOrigins}'"
+        - !If
+          - HasAllowedOrigins
+          - !Sub "'${AllowedOrigins}'"
+          - !Sub "''"  # BUG FIX: Empty string will cause CORS to fail (more secure than 'null' which allows file:// origins)
       MaxAge: "'300'"
+    Auth:
+      Authorizers:
+        CognitoAuthorizer:
+          UserPoolArn: !GetAtt CognitoUserPool.Arn
+          Identity:
+            Header: Authorization
+            ValidationExpression: ^Bearer [-A-Za-z0-9._~+/]+=*$
+      DefaultAuthorizer: CognitoAuthorizer
   Function:
     Runtime: python3.11
     Timeout: 30
     MemorySize: 512
     Environment:
       Variables:
-        # Note: AWS_REGION is automatically set by Lambda, no need to set manually
     # Enable X-Ray tracing for all functions
     Tracing: Active
     # CloudWatch Logs retention (30 days for compliance)
@@ -34,7 +44,7 @@ Resources:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: !Sub '${AWS::StackName}-lambda-dlq'
-      MessageRetentionPeriod: 1209600  # 14 days
+      MessageRetentionPeriod: 1209600  # 14 days (SECURITY: Consider reducing for sensitive data - DLQ contains error metadata, not patient data)
       KmsMasterKeyId: alias/aws/sqs  # Use AWS managed key
 
   # S3 Bucket for access logging (separate to avoid circular dependency)
@@ -138,6 +148,53 @@ Resources:
         - Key: DataClassification
           Value: AnonymizedFeedback
 
+  # Cognito User Pool for authentication
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${AWS::StackName}-users'
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        # Custom attributes must be prefixed with "custom:"
+        - Name: custom:hcpc_number
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+      MfaConfiguration: ON  # SECURITY: Require MFA for healthcare data protection
+      UserPoolTags:
+        Environment: !Ref Environment
+        Project: ClearRecords
+
+  # Cognito User Pool Client (for mobile app)
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      ClientName: !Sub '${AWS::StackName}-mobile-client'
+      GenerateSecret: false  # Mobile apps don't use client secrets
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      AccessTokenValidity: 60  # 1 hour (in minutes)
+      IdTokenValidity: 60  # 1 hour (in minutes)
+      RefreshTokenValidity: 30  # 30 days (in days, not minutes)
+      PreventUserExistenceErrors: ENABLED  # Security: prevent user enumeration
+
   # Health Check Function
   HealthCheckFunction:
     Type: AWS::Serverless::Function
@@ -156,6 +213,8 @@ Resources:
           Properties:
             Path: /health
             Method: get
+            Auth:
+              Authorizer: NONE  # Health check should be public
 
   # Document Processing Function
   DocumentProcessingFunction:
@@ -180,6 +239,8 @@ Resources:
           S3_KEY_PREFIX: !Ref S3KeyPrefix
           VALIDATE_USER_OWNERSHIP: !Ref ValidateUserOwnership
           DYNAMODB_FEEDBACK_TABLE: !Ref FeedbackTable
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+          COGNITO_USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - S3ReadPolicy:
             BucketName: !Ref TempStorageBucket
@@ -219,7 +280,8 @@ Resources:
           Properties:
             Path: /process-document
             Method: post
-            # Auth will be added later with Cognito
+            Auth:
+              Authorizer: CognitoAuthorizer
 
   # Audit Engine Function
   AuditEngineFunction:
@@ -237,10 +299,11 @@ Resources:
           ENVIRONMENT: !Ref Environment
           ALLOWED_ORIGINS: !Ref AllowedOrigins
           DYNAMODB_FEEDBACK_TABLE: !Ref FeedbackTable
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+          COGNITO_USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
-        # DynamoDB read permission (for future use)
-        - DynamoDBReadPolicy:
-            TableName: !Ref FeedbackTable
+        # SECURITY: DynamoDB read permission removed - not currently used (least privilege)
+        # Add back if AuditEngineFunction needs to read from DynamoDB in future
         # CloudWatch Logs permission
         - Version: '2012-10-17'
           Statement:
@@ -256,7 +319,8 @@ Resources:
           Properties:
             Path: /audit
             Method: post
-            # Auth will be added later with Cognito
+            Auth:
+              Authorizer: CognitoAuthorizer
 
   # Feedback Generator Function
   FeedbackGeneratorFunction:
@@ -274,6 +338,8 @@ Resources:
           ENVIRONMENT: !Ref Environment
           ALLOWED_ORIGINS: !Ref AllowedOrigins
           DYNAMODB_FEEDBACK_TABLE: !Ref FeedbackTable
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+          COGNITO_USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         # DynamoDB write permission (for optional feedback storage)
         - DynamoDBWritePolicy:
@@ -293,7 +359,8 @@ Resources:
           Properties:
             Path: /generate-feedback
             Method: post
-            # Auth will be added later with Cognito
+            Auth:
+              Authorizer: CognitoAuthorizer
 
   # SNS Topic for CloudWatch alarm notifications
   AlarmNotificationTopic:
@@ -301,7 +368,9 @@ Resources:
     Properties:
       TopicName: !Sub '${AWS::StackName}-alarms'
       DisplayName: ClearRecords Alarms
-      # Note: SNS doesn't support KMS alias format, encryption is enabled by default
+      # SECURITY: SNS encryption is enabled by default with AWS managed keys
+      # Note: SNS doesn't support KMS alias format in CloudFormation
+      # For customer-managed keys, use full KMS key ARN (not implemented here for simplicity)
 
   # CloudWatch Alarm: Lambda Errors
   LambdaErrorAlarm:
@@ -419,7 +488,7 @@ Parameters:
   AllowedOrigins:
     Type: String
     Default: ''
-    Description: Comma-separated list of allowed CORS origins (leave empty for default behavior)
+    Description: Comma-separated list of allowed CORS origins (MANDATORY in production - API will reject requests if empty)
   
   S3KeyPrefix:
     Type: String
@@ -456,6 +525,7 @@ Parameters:
 # Conditions
 Conditions:
   IsDevelopment: !Equals [!Ref Environment, 'development']
+  HasAllowedOrigins: !Not [!Equals [!Ref AllowedOrigins, '']]
 
 Outputs:
   ApiUrl:
@@ -509,3 +579,21 @@ Outputs:
     Value: !GetAtt FeedbackGeneratorFunction.Arn
     Export:
       Name: !Sub '${AWS::StackName}-FeedbackGeneratorFunction'
+  
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref CognitoUserPool
+    Export:
+      Name: !Sub '${AWS::StackName}-UserPoolId'
+  
+  CognitoUserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref CognitoUserPoolClient
+    Export:
+      Name: !Sub '${AWS::StackName}-UserPoolClientId'
+  
+  CognitoUserPoolArn:
+    Description: Cognito User Pool ARN
+    Value: !GetAtt CognitoUserPool.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-UserPoolArn'
